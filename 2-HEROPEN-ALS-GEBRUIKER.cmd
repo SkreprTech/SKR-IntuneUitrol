@@ -1,6 +1,6 @@
 @echo off
 setlocal
-rem Handmatige hervatting indien Windows de automatische opstart niet uitvoerde.
+rem Handmatig heropenen na aanmelden als de eindgebruiker.
 set "SCRIPT=%ProgramData%\SkreprTech\IntuneChecklist\SkreprTech-Intune-Checklist.ps1"
 if not exist "%SCRIPT%" (
   echo De checklist is op deze computer nog niet voorbereid.

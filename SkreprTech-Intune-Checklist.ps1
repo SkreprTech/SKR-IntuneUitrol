@@ -6,7 +6,7 @@
     Voor bestaande, uitsluitend Microsoft Entra-joined Windows 10/11-apparaten.
     - Wijzigt GEEN lokale administratorrechten; dit wordt via organisatiebeleid beheerd.
     - Maakt een inschrijfknop op basis van dsregcmd MdmUrl.
-    - Hervat automatisch bij volgende aanmelding van precies die gebruiker.
+    - Hervat handmatig na aanmelding via 2-HEROPEN-ALS-GEBRUIKER.cmd.
     - Controleert op een NIEUWE Windows-MDM-registratie voor opruiming.
     - Ruimt tijdelijke inschrijfbestanden na maximaal 2 uur op, ook bij mislukte inschrijving.
     - Alleen interactief met eindgebruiker; geen wachtwoorden worden opgeslagen.
@@ -162,11 +162,6 @@ function Register-ExpiryTask {
     Register-ScheduledTask -TaskName $script:TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
 }
 
-function Set-ResumeRunKey {
-    $command = '"{0}" -NoProfile -ExecutionPolicy Bypass -Sta -WindowStyle Hidden -File "{1}" -Resume' -f $script:RunExe,$script:InstalledPs1
-    New-ItemProperty -Path $script:RunKey -Name $script:RunName -Value $command -PropertyType String -Force | Out-Null
-}
-
 function Write-EnrollmentCommand([string]$upn,[string]$url) {
     $folder = Split-Path -Path $script:EnrollmentCmd -Parent
     New-Item -Path $folder -ItemType Directory -Force | Out-Null
@@ -192,6 +187,8 @@ function Remove-ExpiryTask {
     }
 }
 
+# Alleen om autostart-instellingen uit eerdere scriptversies op te ruimen.
+# Deze versie maakt zelf GEEN autostart aan.
 function Remove-RunKey {
     Remove-ItemProperty -Path $script:RunKey -Name $script:RunName -ErrorAction SilentlyContinue
 }
@@ -218,7 +215,7 @@ function Invoke-EnrollmentCleanup([string]$reason) {
         ('Gebruiker: {0}' -f [string]$state.UPN),
         ('Tijdstip: {0}' -f (Get-Date).ToString('s')),
         ('Afsluitreden: {0}' -f $reason),
-        'Het tijdelijke inschrijfbestand en de autostart zijn opgeruimd.',
+        'Het tijdelijke inschrijfbestand is opgeruimd; eventuele autostart uit eerdere versies is verwijderd.',
         'Deze versie heeft geen administratorrechten gewijzigd. Controleer bij oude uitrolsessies of nog rechten uit v1.0.4 zijn achtergebleven.'
     ) -join [Environment]::NewLine
     Set-Content -LiteralPath $script:ResultPath -Value $text -Encoding UTF8 -Force
@@ -377,7 +374,7 @@ $Xaml = @'
             </StackPanel>
             <Border BorderBrush="#F2E1D6" BorderThickness="0,1,0,0" Margin="0,7,0,17"/>
             <TextBlock Text="Inschrijving" FontSize="20" FontWeight="Bold" Margin="0,0,0,7"/>
-            <TextBlock Text="Na het aanmelden als eindgebruiker komt dit venster automatisch terug. Start dan de Windows MDM-inschrijving; account en server zijn vooraf ingevuld." TextWrapping="Wrap" Foreground="#52525B" FontSize="13" Margin="0,0,0,12"/>
+            <TextBlock Text="Meld je aan als eindgebruiker en open 2-HEROPEN-ALS-GEBRUIKER.cmd handmatig. Start daarna de Windows MDM-inschrijving; account en server zijn vooraf ingevuld." TextWrapping="Wrap" Foreground="#52525B" FontSize="13" Margin="0,0,0,12"/>
             <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
               <Button x:Name="EnrollButton" Content="4  Inschrijving starten" IsEnabled="False"/>
               <Button x:Name="CheckButton" Content="Status controleren" Background="#424242" IsEnabled="False"/>
@@ -401,7 +398,7 @@ $Xaml = @'
     </Grid>
     <Border Grid.Row="2" Background="#291E17" Padding="25,12">
       <Grid>
-        <TextBlock Text="SkreprTech  |  Intune MDM Checklist  |  v1.0.5" Foreground="#FFDFCA" FontSize="12"/>
+        <TextBlock Text="SkreprTech  |  Intune MDM Checklist  |  v1.0.6" Foreground="#FFDFCA" FontSize="12"/>
         <TextBlock Text="Geen wachtwoorden opgeslagen" Foreground="#FFDFCA" FontSize="12" HorizontalAlignment="Right"/>
       </Grid>
     </Border>
@@ -454,7 +451,7 @@ function Refresh-View {
     if ($null -eq $state) {
         Set-Step 1 'Apparaat voorbereiden' 'active'
         Set-Step 2 'Opnieuw aanmelden in Windows' 'waiting'
-        Set-Step 3 'Automatisch verdergaan' 'waiting'
+        Set-Step 3 'Checklist handmatig heropenen' 'waiting'
         Set-Step 4 'MDM-inschrijving starten' 'waiting'
         Set-Step 5 'Inschrijfbestanden opruimen' 'waiting'
         if (Test-Path -LiteralPath $script:ResultPath) {
@@ -468,13 +465,13 @@ function Refresh-View {
     Set-Step 1 'Apparaat voorbereiden' 'done'
     if (-not $isTargetUser) {
         Set-Step 2 'Opnieuw aanmelden in Windows' 'active'
-        Set-Step 3 'Automatisch verdergaan' 'waiting'
+        Set-Step 3 'Checklist handmatig heropenen' 'waiting'
         Set-Step 4 'MDM-inschrijving starten' 'waiting'
         Set-Step 5 'Inschrijfbestanden opruimen' 'waiting'
-        Set-Status "De voorbereiding is klaar voor $($state.UPN). Sla werk op, klik op Afmelden en meld daarna aan als eindgebruiker."
+        Set-Status "De voorbereiding is klaar voor $($state.UPN). Sla werk op, klik op Afmelden, meld aan als eindgebruiker en open 2-HEROPEN-ALS-GEBRUIKER.cmd handmatig."
     } else {
         Set-Step 2 'Opnieuw aanmelden in Windows' 'done'
-        Set-Step 3 'Automatisch verdergaan' 'done'
+        Set-Step 3 'Checklist handmatig heropenen' 'done'
         Set-Step 4 'MDM-inschrijving starten' 'active'
         Set-Step 5 'Inschrijfbestanden opruimen' 'waiting'
         if (Test-NewMdmEnrollment $state) {
@@ -507,7 +504,7 @@ function Request-Cleanup([string]$mode) {
             Set-Status 'Tijdelijke inschrijfbestanden zijn opgeruimd. Lokale administratorrechten zijn niet gewijzigd.'
             foreach ($id in @('EnrollButton','CheckButton','ConfirmButton','CancelButton','LogoffButton','PrepareButton')) { $ctrl[$id].IsEnabled = $false }
             Set-Step 5 'Inschrijfbestanden opruimen' 'done'
-            [System.Windows.MessageBox]::Show($window,'C:\Temp\script.cmd en de automatische opstart zijn opgeruimd. Lokale administratorrechten zijn niet gewijzigd.','Gereed','OK','Information') | Out-Null
+            [System.Windows.MessageBox]::Show($window,'C:\Temp\script.cmd is opgeruimd. Eventuele oude autostart is verwijderd. Lokale administratorrechten zijn niet gewijzigd.','Gereed','OK','Information') | Out-Null
         } else {
             $script:CleanupInvoked = $false
             Set-Status 'Opruiming is nog niet bevestigd. Controleer UAC en probeer Noodopruiming. De veiligheidstaak blijft actief.'
@@ -529,7 +526,7 @@ $ctrl.PrepareButton.Add_Click({
         $sid = Resolve-EntraSid $upn
         $baseline = @(Get-MdmEnrollmentIds)
         if (-not (Ask-Confirm "Apparaat: $env:COMPUTERNAME`nGebruiker: $upn`nMDM URL: $mdmUrl`n`nDeze app wijzigt geen lokale administratorrechten. De ingelogde eindgebruiker moet deze rechten zelf via jullie beleid krijgen als Windows ze vereist. Doorgaan?")) { return }
-        $runCreated = $false; $taskCreated = $false; $fileCreated = $false
+        $taskCreated = $false; $fileCreated = $false
         try {
             New-Item -ItemType Directory -Path $script:Root -Force | Out-Null
             Set-SecureFolderAcl
@@ -540,18 +537,15 @@ $ctrl.PrepareButton.Add_Click({
             $state = [pscustomobject]@{
                 Computer = $env:COMPUTERNAME; UPN = $upn; SID = $sid
                 Account = "AzureAD\$upn"; MdmUrl = $mdmUrl
-                HelperVersion = '1.0.5'; CreatedAt = (Get-Date).ToString('o')
+                HelperVersion = '1.0.6'; CreatedAt = (Get-Date).ToString('o')
                 BaselineEnrollmentIds = @($baseline)
             }
             Save-State $state
-            Set-ResumeRunKey
-            $runCreated = $true
             Register-ExpiryTask
             $taskCreated = $true
         } catch {
             $originalError = $_.Exception.Message
             if ($taskCreated) { try { Remove-ExpiryTask } catch {} }
-            if ($runCreated) { try { Remove-RunKey } catch {} }
             if ($fileCreated) { try { Remove-Item -LiteralPath $script:EnrollmentCmd -Force } catch {} }
             if (Test-Path -LiteralPath $script:StatePath) { try { Remove-Item -LiteralPath $script:StatePath -Force } catch {} }
             throw "Voorbereiding is niet afgerond: $originalError"
@@ -586,13 +580,13 @@ $ctrl.CheckButton.Add_Click({
 })
 
 $ctrl.ConfirmButton.Add_Click({
-    if (Ask-Confirm "Heb je dit apparaat ZELF in het Intune-beheercentrum gecontroleerd en bevestigd dat de inschrijving is geslaagd?`n`nKies JA alleen bij een geslaagde inschrijving. Daarna worden C:\Temp\script.cmd, de automatische opstartinstelling en de opruimtaak verwijderd. Lokale administratorrechten blijven ongewijzigd.") {
+    if (Ask-Confirm "Heb je dit apparaat ZELF in het Intune-beheercentrum gecontroleerd en bevestigd dat de inschrijving is geslaagd?`n`nKies JA alleen bij een geslaagde inschrijving. Daarna worden C:\Temp\script.cmd en de opruimtaak verwijderd (plus eventuele oude autostartinstelling). Lokale administratorrechten blijven ongewijzigd.") {
         Request-Cleanup 'manual-confirmed'
     }
 })
 
 $ctrl.CancelButton.Add_Click({
-    if (Ask-Confirm 'NOODOPRUIMING: het tijdelijke inschrijfbestand en de autostart worden verwijderd, ook als de inschrijving nog niet gelukt is. Lokale administratorrechten blijven ongewijzigd. Doorgaan?') {
+    if (Ask-Confirm 'NOODOPRUIMING: het tijdelijke inschrijfbestand wordt verwijderd (plus eventuele oude autostart), ook als de inschrijving nog niet gelukt is. Lokale administratorrechten blijven ongewijzigd. Doorgaan?') {
         Request-Cleanup 'emergency'
     }
 })
