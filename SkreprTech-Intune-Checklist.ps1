@@ -4,7 +4,9 @@
     SkreprTech Intune MDM Checklist - Windows PowerShell 5.1 + WPF
 .DESCRIPTION
     Voor bestaande, uitsluitend Microsoft Entra-joined Windows 10/11-apparaten.
-    - Wijzigt GEEN lokale administratorrechten; dit wordt via organisatiebeleid beheerd.
+    - Voegt de eindgebruiker bij stap 1 toe aan de lokale Administrators-groep indien nodig.
+    - Intune Local user group membership (Add/Replace) beheert daarna de groepsleden.
+    - Bij mislukte inschrijving moet IT de toegevoegde rechten handmatig controleren/intrekken.
     - Maakt een inschrijfknop met de vaste Microsoft Intune MDM discovery-URL.
     - Hervat handmatig na aanmelding via 2-HEROPEN-ALS-GEBRUIKER.cmd.
     - Controleert op een NIEUWE Windows-MDM-registratie voor opruiming.
@@ -77,6 +79,26 @@ function Resolve-EntraSid([string]$upn) {
             [Security.Principal.SecurityIdentifier]).Value
     } catch {
         throw "Windows kan AzureAD\$upn niet omzetten naar een SID. Laat deze gebruiker eerst een keer aanmelden op dit apparaat. Details: $($_.Exception.Message)"
+    }
+}
+
+function Test-DirectLocalAdministrator([string]$sid) {
+    $groupSid = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
+    $members = @(Get-LocalGroupMember -SID $groupSid -ErrorAction Stop)
+    return (@($members | Where-Object { $_.SID -and $_.SID.Value -eq $sid }).Count -gt 0)
+}
+
+function Add-EnrollmentAdministrator([string]$sid) {
+    $groupSid = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
+    $memberSid = [Security.Principal.SecurityIdentifier]::new($sid)
+    Add-LocalGroupMember -SID $groupSid -Member $memberSid -ErrorAction Stop
+}
+
+function Remove-EnrollmentAdministrator([string]$sid) {
+    $groupSid = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
+    $memberSid = [Security.Principal.SecurityIdentifier]::new($sid)
+    if (Test-DirectLocalAdministrator $sid) {
+        Remove-LocalGroupMember -SID $groupSid -Member $memberSid -ErrorAction Stop
     }
 }
 
@@ -194,9 +216,8 @@ function Invoke-EnrollmentCleanup([string]$reason) {
     $state = Get-State
     if ($null -eq $state) { return }
     if ([string]$state.Computer -ne $env:COMPUTERNAME) { throw 'State hoort bij een ander apparaat.' }
-    # Geen wijzigingen aan de lokale Administrators-groep.
-    # Bij eerdere versies kan het account wel door de oude helper toegevoegd zijn.
-    # De nieuwe helper verwijdert geen via beleid beheerde rechten.
+    # Intune Add (Replace) beheert de groepsleden na succesvolle inschrijving.
+    # Deze opruiming verwijdert alleen inschrijfbestanden, geen groepslidmaatschap.
     Remove-RunKey
     if (Test-Path -LiteralPath $script:EnrollmentCmd) {
         $firstLine = Get-Content -LiteralPath $script:EnrollmentCmd -TotalCount 1 -ErrorAction SilentlyContinue
@@ -212,7 +233,7 @@ function Invoke-EnrollmentCleanup([string]$reason) {
         ('Tijdstip: {0}' -f (Get-Date).ToString('s')),
         ('Afsluitreden: {0}' -f $reason),
         'Het tijdelijke inschrijfbestand is opgeruimd; eventuele autostart uit eerdere versies is verwijderd.',
-        'Deze versie heeft geen administratorrechten gewijzigd. Controleer bij oude uitrolsessies of nog rechten uit v1.0.4 zijn achtergebleven.'
+        'Lokale administratorrechten worden niet ingetrokken door deze opruiming. Controleer Intune Add (Replace). Bij mislukte inschrijving moet IT de rechten handmatig controleren en zo nodig intrekken.'
     ) -join [Environment]::NewLine
     Set-Content -LiteralPath $script:ResultPath -Value $text -Encoding UTF8 -Force
     Remove-Item -LiteralPath $script:StatePath -Force -ErrorAction Stop
@@ -351,7 +372,7 @@ $Xaml = @'
           <Border Background="#FFF5E9" CornerRadius="9" Padding="12" Margin="0,18,0,0">
             <StackPanel>
               <TextBlock Text="BEHEERRECHTEN" Foreground="#A74B08" FontWeight="Bold" FontSize="11"/>
-              <TextBlock Text="Lokale administratorrechten worden beheerd door jullie beleid. Deze app wijzigt geen rechten. Tijdelijke inschrijfbestanden worden na 2 uur opgeruimd als Windows de taak kan uitvoeren." FontSize="12" Foreground="#674B3C" TextWrapping="Wrap" Margin="0,6,0,0"/>
+              <TextBlock Text="Stap 1 voegt de eindgebruiker zo nodig toe aan Administrators. Intune Add (Replace) beheert daarna de rechten. Na 2 uur worden alleen tijdelijke bestanden opgeruimd. Bij mislukte inschrijving: IT moet de beheerrechten controleren." FontSize="12" Foreground="#674B3C" TextWrapping="Wrap" Margin="0,6,0,0"/>
             </StackPanel>
           </Border>
           </StackPanel>
@@ -394,7 +415,7 @@ $Xaml = @'
     </Grid>
     <Border Grid.Row="2" Background="#291E17" Padding="25,12">
       <Grid>
-        <TextBlock Text="SkreprTech  |  Intune MDM Checklist  |  v1.0.7" Foreground="#FFDFCA" FontSize="12"/>
+        <TextBlock Text="SkreprTech  |  Intune MDM Checklist  |  v1.0.8" Foreground="#FFDFCA" FontSize="12"/>
         <TextBlock Text="Geen wachtwoorden opgeslagen" Foreground="#FFDFCA" FontSize="12" HorizontalAlignment="Right"/>
       </Grid>
     </Border>
@@ -432,7 +453,7 @@ function Refresh-View {
     $isTargetUser = $false
     $script:OldStateNotice = $false
     if ($state) { $isTargetUser = ((Get-CurrentSid) -eq [string]$state.SID) }
-    if ($state -and ($state.PSObject.Properties.Name -contains 'AddedByTool')) {
+    if ($state -and (($state.PSObject.Properties.Name -notcontains 'AdminMembershipAdded') -or ($state.PSObject.Properties.Name -contains 'AddedByTool'))) {
         # Een eerdere versie kon rechten toegevoegd hebben. Deze versie raakt die niet aan.
         # Meld expliciet dat de adminrechten via beleid of vanuit de oude helper gecontroleerd moeten worden.
         $script:OldStateNotice = $true
@@ -453,7 +474,7 @@ function Refresh-View {
         if (Test-Path -LiteralPath $script:ResultPath) {
             Set-Status ('Laatste run: ' + ((Get-Content -LiteralPath $script:ResultPath -Tail 3) -join ' | '))
         } else {
-            Set-Status 'Vul het UPN in en klik op Voorbereiden. Lokale beheerrechten worden niet gewijzigd; controleer of de gebruiker via beleid bevoegd is.'
+            Set-Status 'Vul het UPN in en klik op Voorbereiden. De eindgebruiker wordt zo nodig toegevoegd aan de lokale Administrators-groep.'
         }
         return
     }
@@ -464,7 +485,7 @@ function Refresh-View {
         Set-Step 3 'Checklist handmatig heropenen' 'waiting'
         Set-Step 4 'MDM-inschrijving starten' 'waiting'
         Set-Step 5 'Inschrijfbestanden opruimen' 'waiting'
-        Set-Status "De voorbereiding is klaar voor $($state.UPN). Sla werk op, klik op Afmelden, meld aan als eindgebruiker en open 2-HEROPEN-ALS-GEBRUIKER.cmd handmatig."
+        Set-Status "De voorbereiding is klaar voor $($state.UPN). Bij v1.0.8 is het lokale administratorlidmaatschap gecontroleerd. Sla werk op, klik op Afmelden, meld aan als eindgebruiker en open 2-HEROPEN-ALS-GEBRUIKER.cmd handmatig."
     } else {
         Set-Step 2 'Opnieuw aanmelden in Windows' 'done'
         Set-Step 3 'Checklist handmatig heropenen' 'done'
@@ -480,8 +501,7 @@ function Refresh-View {
         }
     }
     if ($script:OldStateNotice) {
-        Set-Status ('LET OP: eerdere uitrolstatus gevonden. De vorige versie heeft mogelijk adminrechten toegevoegd; ' +
-                    'deze versie wijzigt die niet. Controleer na afloop of het beleid de rechten correct beheert.')
+        Set-Status 'LET OP: eerdere uitrolstatus gevonden. Gebruik Noodopruiming als beheerder en start daarna een nieuwe voorbereiding met v1.0.8.'
     }
 }
 
@@ -497,10 +517,10 @@ function Request-Cleanup([string]$mode) {
             Start-Process -FilePath $script:RunExe -ArgumentList $args -Verb RunAs -WindowStyle Hidden -Wait | Out-Null
         }
         if (-not (Test-Path -LiteralPath $script:StatePath)) {
-            Set-Status 'Tijdelijke inschrijfbestanden zijn opgeruimd. Lokale administratorrechten zijn niet gewijzigd.'
+            Set-Status 'Tijdelijke inschrijfbestanden zijn opgeruimd. Controleer of Intune Add (Replace) de tijdelijke administratorrechten heeft ingetrokken.'
             foreach ($id in @('EnrollButton','CheckButton','ConfirmButton','CancelButton','LogoffButton','PrepareButton')) { $ctrl[$id].IsEnabled = $false }
             Set-Step 5 'Inschrijfbestanden opruimen' 'done'
-            [System.Windows.MessageBox]::Show($window,'C:\Temp\script.cmd is opgeruimd. Eventuele oude autostart is verwijderd. Lokale administratorrechten zijn niet gewijzigd.','Gereed','OK','Information') | Out-Null
+            [System.Windows.MessageBox]::Show($window,'C:\Temp\script.cmd is opgeruimd. Eventuele oude autostart is verwijderd. Controleer of Intune Add (Replace) de tijdelijke administratorrechten heeft ingetrokken.','Gereed','OK','Information') | Out-Null
         } else {
             $script:CleanupInvoked = $false
             Set-Status 'Opruiming is nog niet bevestigd. Controleer UAC en probeer Noodopruiming. De veiligheidstaak blijft actief.'
@@ -521,8 +541,9 @@ $ctrl.PrepareButton.Add_Click({
         $mdmUrl = Assert-DeviceAndGetMdmUrl
         $sid = Resolve-EntraSid $upn
         $baseline = @(Get-MdmEnrollmentIds)
-        if (-not (Ask-Confirm "Apparaat: $env:COMPUTERNAME`nGebruiker: $upn`nMDM URL: $mdmUrl`n`nDeze app wijzigt geen lokale administratorrechten. De ingelogde eindgebruiker moet deze rechten zelf via jullie beleid krijgen als Windows ze vereist. Doorgaan?")) { return }
-        $taskCreated = $false; $fileCreated = $false
+        if (-not (Ask-Confirm "Apparaat: $env:COMPUTERNAME`nGebruiker: $upn`nMDM URL: $mdmUrl`n`nDe eindgebruiker wordt zo nodig toegevoegd aan de lokale Administrators-groep. Jullie Intune Add (Replace)-policy beheert daarna de rechten. Bij mislukte inschrijving moet IT de rechten handmatig controleren en zo nodig intrekken. Doorgaan?")) { return }
+        $alreadyMember = Test-DirectLocalAdministrator $sid
+        $taskCreated = $false; $fileCreated = $false; $adminAdded = $false
         try {
             New-Item -ItemType Directory -Path $script:Root -Force | Out-Null
             Set-SecureFolderAcl
@@ -533,14 +554,28 @@ $ctrl.PrepareButton.Add_Click({
             $state = [pscustomobject]@{
                 Computer = $env:COMPUTERNAME; UPN = $upn; SID = $sid
                 Account = "AzureAD\$upn"; MdmUrl = $mdmUrl
-                HelperVersion = '1.0.7'; CreatedAt = (Get-Date).ToString('o')
+                HelperVersion = '1.0.8'; CreatedAt = (Get-Date).ToString('o')
                 BaselineEnrollmentIds = @($baseline)
+                AdminMembershipAdded = (-not $alreadyMember)
             }
             Save-State $state
             Register-ExpiryTask
             $taskCreated = $true
+            # Voeg rechten pas toe nadat alle voorbereidingsbestanden en de taak gereed zijn.
+            if (-not $alreadyMember) {
+                Add-EnrollmentAdministrator $sid
+                $adminAdded = $true
+            }
+            if (-not (Test-DirectLocalAdministrator $sid)) {
+                throw 'De eindgebruiker is niet aangetroffen in de lokale Administrators-groep.'
+            }
         } catch {
             $originalError = $_.Exception.Message
+            # Draai alleen een door deze voorbereiding toegevoegde groepswijziging terug.
+            if ($adminAdded) {
+                try { Remove-EnrollmentAdministrator $sid }
+                catch { $originalError += " | LET OP: terugdraaien administratorrechten mislukt. Controleer $upn handmatig: $($_.Exception.Message)" }
+            }
             if ($taskCreated) { try { Remove-ExpiryTask } catch {} }
             if ($fileCreated) { try { Remove-Item -LiteralPath $script:EnrollmentCmd -Force } catch {} }
             if (Test-Path -LiteralPath $script:StatePath) { try { Remove-Item -LiteralPath $script:StatePath -Force } catch {} }
@@ -576,13 +611,13 @@ $ctrl.CheckButton.Add_Click({
 })
 
 $ctrl.ConfirmButton.Add_Click({
-    if (Ask-Confirm "Heb je dit apparaat ZELF in het Intune-beheercentrum gecontroleerd en bevestigd dat de inschrijving is geslaagd?`n`nKies JA alleen bij een geslaagde inschrijving. Daarna worden C:\Temp\script.cmd en de opruimtaak verwijderd (plus eventuele oude autostartinstelling). Lokale administratorrechten blijven ongewijzigd.") {
+    if (Ask-Confirm "Heb je dit apparaat ZELF in het Intune-beheercentrum gecontroleerd en bevestigd dat de inschrijving is geslaagd?`n`nKies JA alleen bij een geslaagde inschrijving. Daarna worden C:\Temp\script.cmd en de opruimtaak verwijderd (plus eventuele oude autostartinstelling). De Intune Add (Replace)-policy beheert de administratorrechten. Controleer of deze is toegepast.") {
         Request-Cleanup 'manual-confirmed'
     }
 })
 
 $ctrl.CancelButton.Add_Click({
-    if (Ask-Confirm 'NOODOPRUIMING: het tijdelijke inschrijfbestand wordt verwijderd (plus eventuele oude autostart), ook als de inschrijving nog niet gelukt is. Lokale administratorrechten blijven ongewijzigd. Doorgaan?') {
+    if (Ask-Confirm 'NOODOPRUIMING: het tijdelijke inschrijfbestand wordt verwijderd (plus eventuele oude autostart), ook als de inschrijving nog niet gelukt is. De administratorrechten worden hierbij niet ingetrokken. Controleer deze handmatig, vooral bij mislukte inschrijving. Doorgaan?') {
         Request-Cleanup 'emergency'
     }
 })
