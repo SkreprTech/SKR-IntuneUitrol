@@ -90,13 +90,13 @@ function Test-DirectLocalAdministrator([string]$sid) {
 
 function Add-EnrollmentAdministrator([string]$sid) {
     $groupSid = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
-    $memberSid = [Security.Principal.SecurityIdentifier]::new($sid)
+    $memberSid = ([Security.Principal.SecurityIdentifier]::new($sid)).Value
     Add-LocalGroupMember -SID $groupSid -Member $memberSid -ErrorAction Stop
 }
 
 function Remove-EnrollmentAdministrator([string]$sid) {
     $groupSid = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
-    $memberSid = [Security.Principal.SecurityIdentifier]::new($sid)
+    $memberSid = ([Security.Principal.SecurityIdentifier]::new($sid)).Value
     if (Test-DirectLocalAdministrator $sid) {
         Remove-LocalGroupMember -SID $groupSid -Member $memberSid -ErrorAction Stop
     }
@@ -415,7 +415,7 @@ $Xaml = @'
     </Grid>
     <Border Grid.Row="2" Background="#291E17" Padding="25,12">
       <Grid>
-        <TextBlock Text="SkreprTech  |  Intune MDM Checklist  |  v1.0.8" Foreground="#FFDFCA" FontSize="12"/>
+        <TextBlock Text="SkreprTech  |  Intune MDM Checklist  |  v1.0.9" Foreground="#FFDFCA" FontSize="12"/>
         <TextBlock Text="Geen wachtwoorden opgeslagen" Foreground="#FFDFCA" FontSize="12" HorizontalAlignment="Right"/>
       </Grid>
     </Border>
@@ -485,7 +485,7 @@ function Refresh-View {
         Set-Step 3 'Checklist handmatig heropenen' 'waiting'
         Set-Step 4 'MDM-inschrijving starten' 'waiting'
         Set-Step 5 'Inschrijfbestanden opruimen' 'waiting'
-        Set-Status "De voorbereiding is klaar voor $($state.UPN). Bij v1.0.8 is het lokale administratorlidmaatschap gecontroleerd. Sla werk op, klik op Afmelden, meld aan als eindgebruiker en open 2-HEROPEN-ALS-GEBRUIKER.cmd handmatig."
+        Set-Status "De voorbereiding is klaar voor $($state.UPN). Bij v1.0.9 is het lokale administratorlidmaatschap gecontroleerd. Sla werk op, klik op Afmelden, meld aan als eindgebruiker en open 2-HEROPEN-ALS-GEBRUIKER.cmd handmatig."
     } else {
         Set-Step 2 'Opnieuw aanmelden in Windows' 'done'
         Set-Step 3 'Checklist handmatig heropenen' 'done'
@@ -501,7 +501,7 @@ function Refresh-View {
         }
     }
     if ($script:OldStateNotice) {
-        Set-Status 'LET OP: eerdere uitrolstatus gevonden. Gebruik Noodopruiming als beheerder en start daarna een nieuwe voorbereiding met v1.0.8.'
+        Set-Status 'LET OP: eerdere uitrolstatus gevonden. Gebruik Noodopruiming als beheerder en start daarna een nieuwe voorbereiding met v1.0.9.'
     }
 }
 
@@ -554,7 +554,7 @@ $ctrl.PrepareButton.Add_Click({
             $state = [pscustomobject]@{
                 Computer = $env:COMPUTERNAME; UPN = $upn; SID = $sid
                 Account = "AzureAD\$upn"; MdmUrl = $mdmUrl
-                HelperVersion = '1.0.8'; CreatedAt = (Get-Date).ToString('o')
+                HelperVersion = '1.0.9'; CreatedAt = (Get-Date).ToString('o')
                 BaselineEnrollmentIds = @($baseline)
                 AdminMembershipAdded = (-not $alreadyMember)
             }
