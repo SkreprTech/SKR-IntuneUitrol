@@ -5,7 +5,7 @@
 .DESCRIPTION
     Voor bestaande, uitsluitend Microsoft Entra-joined Windows 10/11-apparaten.
     - Wijzigt GEEN lokale administratorrechten; dit wordt via organisatiebeleid beheerd.
-    - Maakt een inschrijfknop op basis van dsregcmd MdmUrl.
+    - Maakt een inschrijfknop met de vaste Microsoft Intune MDM discovery-URL.
     - Hervat handmatig na aanmelding via 2-HEROPEN-ALS-GEBRUIKER.cmd.
     - Controleert op een NIEUWE Windows-MDM-registratie voor opruiming.
     - Ruimt tijdelijke inschrijfbestanden na maximaal 2 uur op, ook bij mislukte inschrijving.
@@ -29,6 +29,7 @@ $script:InstalledPs1 = Join-Path $script:Root 'SkreprTech-Intune-Checklist.ps1'
 $script:StatePath    = Join-Path $script:Root 'state.json'
 $script:ResultPath   = Join-Path $script:Root 'resultaat.txt'
 $script:EnrollmentCmd = Join-Path $env:SystemDrive 'Temp\script.cmd'
+$script:MdmUrl       = 'https://enrollment.manage.microsoft.com/enrollmentserver/discovery.svc'
 $script:RunKey       = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run'
 $script:RunName      = 'SkreprTechIntuneChecklist'
 $script:TaskName     = 'SkreprTech-IntuneChecklist-Veiligheidsopruiming'
@@ -65,14 +66,9 @@ function Assert-DeviceAndGetMdmUrl {
     if ($output -notmatch '(?im)^\s*DomainJoined\s*:\s*NO\s*$') {
         throw 'Dit programma is uitsluitend voor cloud-only Entra-joined apparaten.'
     }
-    $match = [regex]::Match($output, '(?im)^\s*MdmUrl\s*:\s*(https://\S+)\s*$')
-    if (-not $match.Success) { throw 'MdmUrl ontbreekt in dsregcmd /status.' }
-    $value = $match.Groups[1].Value.Trim()
-    $uri = $null
-    if (-not [uri]::TryCreate($value,[UriKind]::Absolute,[ref]$uri) -or $uri.Scheme -ne 'https') {
-        throw 'De gevonden MdmUrl is geen geldige HTTPS-URL.'
-    }
-    return $value
+    # De MDM-URL hoeft niet in dsregcmd /status aanwezig te zijn.
+    # Gebruik altijd de vaste Intune discovery-URL voor handmatige inschrijving.
+    return $script:MdmUrl
 }
 
 function Resolve-EntraSid([string]$upn) {
@@ -398,7 +394,7 @@ $Xaml = @'
     </Grid>
     <Border Grid.Row="2" Background="#291E17" Padding="25,12">
       <Grid>
-        <TextBlock Text="SkreprTech  |  Intune MDM Checklist  |  v1.0.6" Foreground="#FFDFCA" FontSize="12"/>
+        <TextBlock Text="SkreprTech  |  Intune MDM Checklist  |  v1.0.7" Foreground="#FFDFCA" FontSize="12"/>
         <TextBlock Text="Geen wachtwoorden opgeslagen" Foreground="#FFDFCA" FontSize="12" HorizontalAlignment="Right"/>
       </Grid>
     </Border>
@@ -537,7 +533,7 @@ $ctrl.PrepareButton.Add_Click({
             $state = [pscustomobject]@{
                 Computer = $env:COMPUTERNAME; UPN = $upn; SID = $sid
                 Account = "AzureAD\$upn"; MdmUrl = $mdmUrl
-                HelperVersion = '1.0.6'; CreatedAt = (Get-Date).ToString('o')
+                HelperVersion = '1.0.7'; CreatedAt = (Get-Date).ToString('o')
                 BaselineEnrollmentIds = @($baseline)
             }
             Save-State $state
